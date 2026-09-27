@@ -1,0 +1,23 @@
+[package]
+name = "diorama_raytracer"
+version = "0.1.0"
+edition = "2024"
+
+# Mismo stack que usa el curso (cc2018) en todas sus ramas de referencia, incluyendo
+# 18-RT-06-REFLECTIONS (el punto exacto donde arranca este proyecto): minifb para la
+# ventana/framebuffer, nalgebra-glm para Vec3, image para decodificar las texturas PNG.
+# Ver README para la justificación completa frente a la regla de "sin librerías externas".
+[dependencies]
+minifb = "0.28.0"
+nalgebra-glm = "0.18.0"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# Un raytracer sin optimizar en debug es demasiado lento para probar en vivo mientras
+# se desarrolla. opt-level = 2 da un buen punto medio entre velocidad de compilación
+# e iteración fluida.
+[profile.dev]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+lto = true
