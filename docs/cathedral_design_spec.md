@@ -632,6 +632,12 @@ Cada luz sale de la llama de un prop (fase 5):
 
 41. **El zombi de la mordida, más visible ✅** — Sin cambiarle la pose: la cabeza 20% más grande y los brazos (y los bíceps) 40% más gruesos, con las manos un poco más grandes. `Skeleton` sumó `head_scale` y `arm_scale` (1 = proporción real, lo de todas las demás figuras); la boca se sigue poniendo en la mordida después de agrandar la cabeza, así que sigue mordiendo el cuello de la novia.
 
+42. **Una segunda foto: el vitral rajado ✅** — Entre la foto de los novios y el diorama, una segunda foto (`assets/intro/secondscene.png`, puesta por el autor: el vitral detrás del altar con una rajadura en estrella), centrada como la primera pero un 20% más grande (737×414 en una ventana de 1280×720; es la que hay que mirar de cerca), con el cartel "WAS THAT CRACK ALWAYS THERE? PRESS ANY KEY TO SNAP A PHOTO" debajo. Cada foto termina en el flash de la cámara; después del segundo arranca el diorama en ese mismo vitral, ya reventado por los zombis. Si falta el archivo, se saltea esa foto. La tipografía sumó la F; un test controla que todos los carteles de la intro entren a lo ancho de la ventana.
+
+43. **Del flash directo al diorama ✅** — El flash de la última foto (el vitral rajado) ya no se apaga en negro: queda en blanco mientras el diorama dibuja su primer cuadro, y después el blanco se apaga sobre el diorama con la misma curva del flash (`intro::Ending::White`, `fade_in_level`, `whiten`). Así la cámara "se aclara" directo en el vitral reventado. Costo nulo: es una mezcla por píxel durante ~650 ms, sin render extra. El flash de la primera foto sigue apagándose en negro. Test: el blanqueo deja la imagen igual a nivel 0 y blanca a 255.
+
+44. **La foto del vitral entra con interferencia ✅** — Al aparecer la foto del vitral rajado, 0.6 s de interferencia que se calma hasta la foto limpia: franjas horizontales de alto al azar corridas hacia un costado, el rojo y el azul separados del verde y alguna franja negra, con el patrón cambiando cada dos cuadros (más a saltos). Después, a pedido del autor, también la foto de los novios entra así. Solo código (`intro::glitch_in`, `glitch_frame`), sin costo de render. Test: sin intensidad la imagen queda igual; al máximo cambia.
+
 ---
 
 ## 5. Especificación original de Manus

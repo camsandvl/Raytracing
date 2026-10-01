@@ -445,9 +445,18 @@ fn run_window(presets: &[CameraPreset], bounds: &[(Vec3, Vec3)], walk_spawn: Spa
 
     // La placa de título y la escena de introducción (opcional, ver `intro.rs`); si el
     // usuario cierra la ventana ahí, no hay que seguir.
-    if !skip_intro && !intro::show(&mut window, display_w, display_h) {
-        return;
+    let mut from_white = false;
+    if !skip_intro {
+        match intro::show(&mut window, display_w, display_h) {
+            intro::Ending::Closed => return,
+            intro::Ending::White => from_white = true,
+            intro::Ending::Black => {}
+        }
     }
+    // Si la intro terminó en el blanco del flash, el diorama aparece desde ese blanco: se
+    // aclara a partir del primer cuadro dibujado (el flash queda en pantalla mientras).
+    let mut fade_start: Option<Instant> = None;
+    let mut faded = vec![0u32; display_w * display_h];
 
     let mut preset_index = 0;
     let mut camera = camera_from(&presets[preset_index], bounds);
@@ -592,7 +601,14 @@ fn run_window(presets: &[CameraPreset], bounds: &[(Vec3, Vec3)], walk_spawn: Spa
             Pending::Done => {}
         }
 
-        window.update_with_buffer(&display, display_w, display_h).expect("fallo actualizando la ventana");
+        if from_white {
+            let level = intro::fade_in_level(fade_start.get_or_insert_with(Instant::now).elapsed());
+            from_white = level > 0;
+            intro::whiten(&display, level, &mut faded);
+            window.update_with_buffer(&faded, display_w, display_h).expect("fallo actualizando la ventana");
+        } else {
+            window.update_with_buffer(&display, display_w, display_h).expect("fallo actualizando la ventana");
+        }
         std::thread::sleep(Duration::from_millis(16).saturating_sub(now.elapsed()));
     }
 }
