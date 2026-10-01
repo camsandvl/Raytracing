@@ -32,17 +32,29 @@ pub enum Role {
     Officiant,
 }
 
-struct Body<'a> {
+/// Un grid de figura de 5 cm (17 × 37 × 17 celdas, 0.85 × 1.85 × 0.85 m) con los pies
+/// centrados en un punto y orientado hacia `facing`. Lo usan los esqueletos de acá y las
+/// personas de `people.rs`.
+pub(super) struct Body<'a> {
     grid: VoxelGrid,
     facing: Facing,
-    m: &'a MaterialSet,
+    pub(super) m: &'a MaterialSet,
     seed: u32,
 }
 
-impl Body<'_> {
-    /// Coordenadas locales del esqueleto: `x` hacia el costado, `y` hacia arriba
-    /// desde los pies, `z` hacia adelante (hacia donde mira). Se rotan según `facing`.
-    fn set(&mut self, x: isize, y: isize, z: isize, material: Material) {
+impl<'a> Body<'a> {
+    pub(super) fn new(m: &'a MaterialSet, feet: Vec3, facing: Facing, seed: u32) -> Self {
+        let origin = feet - Vec3::new(HALF as f32 + 0.5, 0.0, HALF as f32 + 0.5) * DETAIL;
+        Body { grid: VoxelGrid::new(DIMS, DETAIL, origin), facing, m, seed }
+    }
+
+    pub(super) fn into_grid(self) -> VoxelGrid {
+        self.grid
+    }
+
+    /// Coordenadas locales de la figura: `x` hacia el costado, `y` hacia arriba desde
+    /// los pies, `z` hacia adelante (hacia donde mira). Se rotan según `facing`.
+    pub(super) fn set(&mut self, x: isize, y: isize, z: isize, material: Material) {
         let (gx, gz) = match self.facing {
             Facing::PosX => (HALF + z, HALF - x),
             Facing::NegX => (HALF - z, HALF + x),
@@ -53,7 +65,7 @@ impl Body<'_> {
         }
     }
 
-    fn fill(&mut self, x: (isize, isize), y: (isize, isize), z: (isize, isize), material: Material) {
+    pub(super) fn fill(&mut self, x: (isize, isize), y: (isize, isize), z: (isize, isize), material: Material) {
         for xi in x.0..x.1 {
             for yi in y.0..y.1 {
                 for zi in z.0..z.1 {
@@ -205,8 +217,7 @@ impl Body<'_> {
 
 /// Construye un esqueleto parado con los pies centrados en `feet` (mundo).
 pub fn build(m: &MaterialSet, role: Role, feet: Vec3, facing: Facing, seed: u32) -> VoxelGrid {
-    let origin = feet - Vec3::new(HALF as f32 + 0.5, 0.0, HALF as f32 + 0.5) * DETAIL;
-    let mut body = Body { grid: VoxelGrid::new(DIMS, DETAIL, origin), facing, m, seed };
+    let mut body = Body::new(m, feet, facing, seed);
 
     body.skeleton();
     match role {
@@ -229,5 +240,5 @@ pub fn build(m: &MaterialSet, role: Role, feet: Vec3, facing: Facing, seed: u32)
         }
     }
     body.overgrowth();
-    body.grid
+    body.into_grid()
 }

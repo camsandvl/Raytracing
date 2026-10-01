@@ -1,2 +1,6 @@
 /target
 /.claude
+
+# Skills de Claude (carpetas de skills y skills empaquetadas): no van al repo.
+skills/
+*.skill

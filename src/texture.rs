@@ -112,6 +112,38 @@ impl Texture {
         Texture { width: size, height: size, span: 1.0, pixels }
     }
 
+    /// Mármol: tono de base con variación suave y vetas finas onduladas que cruzan varias
+    /// celdas (el tile abarca `span` celdas). El ruido y las vetas son periódicos, así el
+    /// tile se repite sin costura y sin contorno por bloque.
+    pub fn marble(size: usize, span: f32, base: Color, vein: Color, veins: f32, seed: u32) -> Texture {
+        const LATTICE: usize = 8;
+        let mut rng = Rng::new(seed);
+        let lattice: Vec<f32> = (0..LATTICE * LATTICE).map(|_| rng.next_f32()).collect();
+        let n = LATTICE as f32;
+        // Ruido de valor periódico con interpolación suave; `u`, `v` en celdas de la red.
+        let noise = |u: f32, v: f32| {
+            let at = |x: f32, y: f32| lattice[y.rem_euclid(n) as usize * LATTICE + x.rem_euclid(n) as usize];
+            let (x0, y0) = (u.floor(), v.floor());
+            let smooth = |t: f32| t * t * (3.0 - 2.0 * t);
+            let (fx, fy) = (smooth(u - x0), smooth(v - y0));
+            let top = at(x0, y0) + (at(x0 + 1.0, y0) - at(x0, y0)) * fx;
+            let bottom = at(x0, y0 + 1.0) + (at(x0 + 1.0, y0 + 1.0) - at(x0, y0 + 1.0)) * fx;
+            top + (bottom - top) * fy
+        };
+
+        let pixels = (0..size * size)
+            .map(|i| {
+                let (u, v) = ((i % size) as f32 / size as f32, (i / size) as f32 / size as f32);
+                let broad = noise(u * n, v * n);
+                let turbulence = broad + 0.5 * noise(u * n * 2.0, v * n * 2.0);
+                let wave = (std::f32::consts::TAU * (2.0 * u + v + 1.2 * turbulence)).sin();
+                let vein_amount = (1.0 - wave.abs()).powi(10) * veins;
+                Color::lerp(scaled(base, 0.93 + 0.14 * broad), vein, vein_amount)
+            })
+            .collect();
+        Texture { width: size, height: size, span, pixels }
+    }
+
     /// Vidrio: grano casi imperceptible + líneas oscuras de "plomo" en los bordes del
     /// tile, imitando el emplomado entre paneles de un vitral. El tinte de color real
     /// lo aporta `Material.diffuse`, no esta textura — esto evita que el vidrio sea un

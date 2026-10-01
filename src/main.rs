@@ -1,13 +1,18 @@
 mod camera;
+mod group;
 mod color;
+mod font;
+mod intro;
 mod light;
 mod materials;
+mod post;
 mod ray_intersect;
 mod rng;
 mod scene;
 mod skybox;
 mod texture;
 mod voxel_grid;
+mod walker;
 
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Window, WindowOptions};
 use nalgebra_glm::{dot, Vec3};
@@ -20,34 +25,47 @@ use light::Light;
 use ray_intersect::{Intersect, RayIntersect};
 use scene::{CameraPreset, Scene};
 use texture::TextureBank;
+use walker::{MoveInput, Spawn, Walker};
 
 // Resolución interactiva (mientras la cámara se mueve); al soltarla se re-renderiza a
 // la resolución completa de la ventana (`WIDTH * DISPLAY_SCALE`).
 const WIDTH: usize = 640;
 const HEIGHT: usize = 360;
 const DISPLAY_SCALE: usize = 2;
+/// Filas por franja del render de calidad completa (ver `render_rows`).
+const FULL_BAND: usize = 90;
 
 const FOV: f32 = PI / 3.0;
 const MAX_DEPTH: u32 = 3;
 const SURFACE_BIAS: f32 = 1e-3;
 const MAX_SHADOW_HITS: usize = 8;
+/// Un rayo secundario (reflejo o refracción) que aportaría menos que esto al color del
+/// píxel no se lanza: un reflejo del piso en el piso (12% × 12%) no se nota y costaba lo
+/// mismo que cualquier otro rayo, sombras incluidas.
+const MIN_RAY_WEIGHT: f32 = 0.03;
 /// Luces cuya contribución (ya atenuada por distancia) queda por debajo de esto no se
 /// evalúan — ahorra el rayo de sombra de cada vela lejana.
-const LIGHT_CUTOFF: f32 = 0.015;
+const LIGHT_CUTOFF: f32 = 0.04;
 /// Distancia² mínima para la atenuación de las velas: sin esto, una superficie pegada
 /// a una llama recibe una intensidad casi infinita y se quema a blanco.
 const LIGHT_MIN_DIST2: f32 = 9.0;
 /// Relleno ambiental frío (el cielo nocturno): nada queda negro absoluto, pero lo que
 /// no alcanza ninguna vela ni la luna se lee en penumbra azulada.
-const AMBIENT: Color = Color { r: 24, g: 28, b: 42 };
+const AMBIENT: Color = Color { r: 12, g: 14, b: 24 };
 /// Exposición del tone mapping: con 1.4 los medios tonos quedan casi lineales y solo
 /// las zonas junto a las llamas se comprimen hacia el blanco cálido.
-const EXPOSURE: f32 = 1.4;
+const EXPOSURE: f32 = 1.8;
+/// Bruma de profundidad: cada superficie se funde hacia `HAZE` según la distancia que
+/// recorrió el rayo (la mitad a ~25 m). Los rayos que salen por una ventana al cielo no
+/// se tocan: la luna y las estrellas quedan nítidas en los vanos.
+const HAZE: Color = Color { r: 5, g: 7, b: 13 };
+const HAZE_DENSITY: f32 = 0.0055; // por unidad de mundo (20 cm)
 
 const ORBIT_SPEED: f32 = 1.5; // rad/s
 const MOUSE_ORBIT_SPEED: f32 = 0.005; // rad por pixel arrastrado
 const ZOOM_SPEED: f32 = 0.8; // fracción del radio por segundo (teclado)
 const WHEEL_ZOOM: f32 = 0.08; // fracción del radio por "click" de scroll
+const WALK_TURN_SPEED: f32 = 1.8; // rad/s con las flechas, en primera persona
 
 pub fn reflect(incident: &Vec3, normal: &Vec3) -> Vec3 {
     incident - normal * (2.0 * dot(incident, normal))
@@ -101,40 +119,43 @@ fn offset_origin(point: &Vec3, normal: &Vec3, direction: &Vec3) -> Vec3 {
 }
 
 fn closest_hit(origin: &Vec3, direction: &Vec3, objects: &[Box<dyn RayIntersect>]) -> Option<Intersect> {
-    let mut closest: Option<Intersect> = None;
-    for object in objects {
-        if let Some(hit) = object.ray_intersect(origin, direction) {
-            if closest.is_none_or(|current| hit.distance < current.distance) {
-                closest = Some(hit);
-            }
-        }
-    }
-    closest
+    ray_intersect::nearest_hit(objects, origin, direction, f32::INFINITY)
 }
 
-/// Cuánta luz llega desde `point` hasta la luz (0 = sombra total, 1 = sin obstáculos).
-/// Un objeto opaco en el camino bloquea todo; uno transparente (el vidrio) deja pasar
-/// su fracción de transparencia y el rayo sigue — así la luz de las velas atraviesa
-/// las ventanas y se derrama sobre la plaza de afuera.
-fn shadow_transmission(point: &Vec3, normal: &Vec3, light_dir: &Vec3, light_distance: f32, objects: &[Box<dyn RayIntersect>]) -> f32 {
+/// Cuánta luz llega desde `point` hasta la luz, por canal (0 = sombra total, 1 = sin
+/// obstáculos). Un objeto opaco en el camino bloquea todo; uno transparente (el vidrio)
+/// deja pasar su fracción de transparencia TEÑIDA de su color y el rayo sigue — así la
+/// luna que entra por un vitral pinta el piso de azul, rojo y ámbar.
+fn shadow_transmission(point: &Vec3, normal: &Vec3, light_dir: &Vec3, light_distance: f32, objects: &[Box<dyn RayIntersect>]) -> Vec3 {
     let mut origin = offset_origin(point, normal, light_dir);
     let mut remaining = light_distance;
-    let mut transmission = 1.0;
+    let mut transmission = Vec3::new(1.0, 1.0, 1.0);
 
     for _ in 0..MAX_SHADOW_HITS {
-        let Some(hit) = closest_hit(&origin, light_dir, objects) else {
+        // No hace falta el impacto más cercano de todos: en cuanto un objeto reporta algo
+        // opaco antes de la luz, la sombra es total, sin mirar el resto de los objetos (la
+        // catedral va primero y es la que tapa casi siempre).
+        let mut nearest_glass: Option<Intersect> = None;
+        for object in objects {
+            if object.entry_distance(&origin, light_dir).is_none_or(|t| t >= remaining) {
+                continue;
+            }
+            if let Some(hit) = object.ray_intersect_within(&origin, light_dir, remaining) {
+                if hit.material.albedo[3] <= 0.0 {
+                    return Vec3::zeros();
+                }
+                if nearest_glass.is_none_or(|g| hit.distance < g.distance) {
+                    nearest_glass = Some(hit);
+                }
+            }
+        }
+        let Some(hit) = nearest_glass else {
             return transmission;
         };
-        if hit.distance >= remaining {
-            return transmission;
-        }
         let transparency = hit.material.albedo[3];
-        if transparency <= 0.0 {
-            return 0.0;
-        }
         // Cada panel de vidrio son dos cruces (entrada y salida): se atenúa solo al entrar.
         if dot(light_dir, &hit.normal) < 0.0 {
-            transmission *= transparency;
+            transmission = transmission.component_mul(&(linear(hit.material.diffuse) * transparency));
         }
         remaining -= hit.distance;
         origin = offset_origin(&hit.point, &hit.normal, light_dir);
@@ -176,7 +197,7 @@ pub fn shade(intersect: &Intersect, ray_origin: &Vec3, lights: &[Light], objects
 
     let view_direction = (ray_origin - intersect.point).normalize();
     let transparency = material.albedo[3];
-    let mut surface = base.component_mul(&linear(AMBIENT));
+    let mut surface = base.component_mul(&linear(AMBIENT)) + base * material.glow;
     let mut backlight = Vec3::zeros();
 
     for light in lights {
@@ -187,28 +208,35 @@ pub fn shade(intersect: &Intersect, ray_origin: &Vec3, lights: &[Light], objects
             let distance = to_light.magnitude();
             // Inverso del cuadrado de la distancia — cada vela ilumina un charco
             // cercano y se apaga rápido, que es el look "iluminado solo por velas".
-            (to_light / distance, distance, 1.0 / (distance * distance).max(LIGHT_MIN_DIST2))
+            let direction = to_light / distance;
+            let cone = light.spot.map_or(1.0, |spot| spot.falloff(&-direction));
+            (direction, distance, cone / (distance * distance).max(LIGHT_MIN_DIST2))
         };
 
-        let intensity = light.intensity * attenuation;
+        // Se resta el umbral en vez de solo cortar: así cada vela se apaga suave hasta 0
+        // justo donde deja de evaluarse, sin un borde visible en muros y piso.
+        let intensity = light.intensity * attenuation - LIGHT_CUTOFF;
         let facing = dot(&intersect.normal, &light_direction);
-        if intensity < LIGHT_CUTOFF || (facing <= 0.0 && transparency <= 0.0) {
+        if intensity <= 0.0 || (facing <= 0.0 && transparency <= 0.0) {
             continue;
         }
 
-        let intensity = intensity * shadow_transmission(&intersect.point, &intersect.normal, &light_direction, light_distance, objects);
-        if intensity <= 0.0 {
+        if light.aperture.is_some_and(|a| !a.admits(&intersect.point, &light_direction, light_distance)) {
+            continue;
+        }
+        let transmission = shadow_transmission(&intersect.point, &intersect.normal, &light_direction, light_distance, objects);
+        if transmission.max() <= 0.0 {
             continue;
         }
 
-        let light_color = linear(light.color);
+        let light_color = linear(light.color).component_mul(&transmission) * intensity;
         if facing > 0.0 {
-            surface += base.component_mul(&light_color) * (facing * material.albedo[0] * intensity);
+            surface += base.component_mul(&light_color) * (facing * material.albedo[0]);
             let reflect_dir = reflect(&-light_direction, &intersect.normal);
             let specular = dot(&view_direction, &reflect_dir).max(0.0).powf(material.specular);
-            surface += light_color * (specular * material.albedo[1] * intensity);
+            surface += light_color * (specular * material.albedo[1]);
         } else {
-            backlight += base.component_mul(&light_color) * (-facing * transparency * intensity);
+            backlight += base.component_mul(&light_color) * (-facing * transparency);
         }
     }
 
@@ -222,6 +250,7 @@ pub fn cast_ray(
     lights: &[Light],
     textures: &TextureBank,
     depth: u32,
+    weight: f32,
 ) -> Vec3 {
     if depth > MAX_DEPTH {
         return linear(skybox::sample(ray_direction));
@@ -230,40 +259,55 @@ pub fn cast_ray(
     let Some(intersect) = closest_hit(ray_origin, ray_direction, objects) else {
         return linear(skybox::sample(ray_direction));
     };
+    let color = hit_color(&intersect, ray_origin, ray_direction, objects, lights, textures, depth, weight);
+    let fade = (-intersect.distance * HAZE_DENSITY).exp();
+    color * fade + linear(HAZE) * (1.0 - fade)
+}
 
-    let (local_color, backlight) = shade(&intersect, ray_origin, lights, objects, textures);
-
-    let reflectivity = intersect.material.albedo[2];
-    let transparency = intersect.material.albedo[3];
+/// El color de lo que el rayo encontró: su iluminación, y el reflejo o la refracción si
+/// el material los tiene. `weight` es cuánto aporta este rayo al píxel; los rayos
+/// secundarios que aportarían menos que `MIN_RAY_WEIGHT` no se lanzan.
+#[allow(clippy::too_many_arguments)]
+fn hit_color(
+    intersect: &Intersect,
+    ray_origin: &Vec3,
+    ray_direction: &Vec3,
+    objects: &[Box<dyn RayIntersect>],
+    lights: &[Light],
+    textures: &TextureBank,
+    depth: u32,
+    weight: f32,
+) -> Vec3 {
+    let (local_color, backlight) = shade(intersect, ray_origin, lights, objects, textures);
+    let material = &intersect.material;
+    let (reflectivity, transparency) = (material.albedo[2], material.albedo[3]);
+    let normal = intersect.normal;
+    let trace = |direction: Vec3, share: f32| {
+        let origin = offset_origin(&intersect.point, &normal, &direction);
+        cast_ray(&origin, &direction, objects, lights, textures, depth + 1, share)
+    };
 
     if transparency > 0.0 {
-        let normal = intersect.normal;
-        let fresnel = fresnel_schlick(ray_direction, &normal, intersect.material.refractive_index);
-
-        let reflect_dir = reflect(ray_direction, &normal).normalize();
-        let reflect_origin = offset_origin(&intersect.point, &normal, &reflect_dir);
-        let reflect_color = cast_ray(&reflect_origin, &reflect_dir, objects, lights, textures, depth + 1);
-
-        let refract_color = match refract(ray_direction, &normal, intersect.material.refractive_index) {
-            Some(refract_dir) => {
-                let refract_dir = refract_dir.normalize();
-                let refract_origin = offset_origin(&intersect.point, &normal, &refract_dir);
-                cast_ray(&refract_origin, &refract_dir, objects, lights, textures, depth + 1)
-            }
-            // reflexión interna total: no hay refracción posible, toda la energía se refleja
-            None => reflect_color,
-        };
+        let refract_dir = refract(ray_direction, &normal, material.refractive_index).map(|d| d.normalize());
+        // Sin refracción posible (reflexión interna total) toda la energía se refleja.
+        let fresnel = if refract_dir.is_some() { fresnel_schlick(ray_direction, &normal, material.refractive_index) } else { 1.0 };
+        let share = weight * transparency;
+        let reflect_color = (share * fresnel >= MIN_RAY_WEIGHT).then(|| trace(reflect(ray_direction, &normal).normalize(), share * fresnel));
+        let refract_color = refract_dir.filter(|_| share * (1.0 - fresnel) >= MIN_RAY_WEIGHT).map(|d| trace(d, share * (1.0 - fresnel)));
 
         // Lo que se ve a través (y reflejado en) el vidrio sale filtrado por su color.
-        let blended = refract_color + (reflect_color - refract_color) * fresnel;
-        let transmitted = blended.component_mul(&linear(intersect.material.diffuse));
+        let blended = match (refract_color, reflect_color) {
+            (Some(through), Some(mirror)) => through + (mirror - through) * fresnel,
+            (Some(through), None) => through,
+            (None, Some(mirror)) => mirror,
+            (None, None) => local_color,
+        };
+        let transmitted = blended.component_mul(&linear(material.diffuse));
         return local_color * (1.0 - transparency) + transmitted * transparency + backlight;
     }
 
-    if reflectivity > 0.0 {
-        let reflect_dir = reflect(ray_direction, &intersect.normal).normalize();
-        let reflect_origin = offset_origin(&intersect.point, &intersect.normal, &reflect_dir);
-        let reflect_color = cast_ray(&reflect_origin, &reflect_dir, objects, lights, textures, depth + 1);
+    if reflectivity > 0.0 && weight * reflectivity >= MIN_RAY_WEIGHT {
+        let reflect_color = trace(reflect(ray_direction, &normal).normalize(), weight * reflectivity);
         return local_color * (1.0 - reflectivity) + reflect_color * reflectivity;
     }
 
@@ -277,13 +321,23 @@ pub fn cast_ray(
 /// hilo) para que ninguna quede mucho más cara que el resto: el cielo es barato, la
 /// nave con velas no.
 fn render(buffer: &mut [u32], width: usize, height: usize, objects: &[Box<dyn RayIntersect>], camera: &Camera, lights: &[Light], textures: &TextureBank) {
+    render_rows(buffer, width, height, 0, objects, camera, lights, textures);
+}
+
+/// Como `render`, pero solo una franja de filas: `buffer` son las filas desde
+/// `first_row` de una imagen de `width` × `height`. La ventana renderiza la calidad
+/// completa así, de a franjas, para seguir atendiendo el teclado y el mouse entre una y
+/// otra.
+#[allow(clippy::too_many_arguments)]
+fn render_rows(buffer: &mut [u32], width: usize, height: usize, first_row: usize, objects: &[Box<dyn RayIntersect>], camera: &Camera, lights: &[Light], textures: &TextureBank) {
+    let rows = buffer.len() / width;
     let w = width as f32;
     let h = height as f32;
     let aspect_ratio = w / h;
     let perspective_scale = (FOV / 2.0).tan();
 
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
-    let rows_per_chunk = height.div_ceil(threads * 4).max(1);
+    let rows_per_chunk = rows.div_ceil(threads * 4).max(1);
     let chunks = std::sync::Mutex::new(buffer.chunks_mut(rows_per_chunk * width).enumerate());
 
     std::thread::scope(|scope| {
@@ -291,14 +345,14 @@ fn render(buffer: &mut [u32], width: usize, height: usize, objects: &[Box<dyn Ra
             scope.spawn(|| loop {
                 let next = chunks.lock().unwrap().next();
                 let Some((index, chunk)) = next else { break };
-                let y_start = index * rows_per_chunk;
+                let y_start = first_row + index * rows_per_chunk;
                 for (row_offset, row) in chunk.chunks_mut(width).enumerate() {
                     let y = y_start + row_offset;
                     let screen_y = (-(2.0 * y as f32 + 1.0) / h + 1.0) * perspective_scale;
                     for (x, pixel) in row.iter_mut().enumerate() {
                         let screen_x = ((2.0 * x as f32 + 1.0) / w - 1.0) * aspect_ratio * perspective_scale;
                         let ray_direction = camera.basis_change(&Vec3::new(screen_x, screen_y, -1.0).normalize());
-                        *pixel = tonemap(&cast_ray(&camera.eye, &ray_direction, objects, lights, textures, 0));
+                        *pixel = tonemap(&cast_ray(&camera.eye, &ray_direction, objects, lights, textures, 0, 1.0));
                     }
                 }
             });
@@ -335,14 +389,19 @@ fn render_supersampled(width: usize, height: usize, ss: usize, objects: &[Box<dy
     out
 }
 
-fn camera_from(preset: &CameraPreset) -> Camera {
-    Camera::new(preset.eye, preset.target, Vec3::new(0.0, 1.0, 0.0))
+/// `bounds` es `Scene::camera_bounds`: una caja por cada sala real, para las escenas donde
+/// no hay nada afuera de ellas (la catedral, solo interior). Fuera de esa unión la cámara
+/// orbital no puede orbitar ni alejarse más (ver `Camera::with_bounds`); vacío la deja
+/// libre (la iglesia original, que sí tiene vistas exteriores a propósito). El modo
+/// primera persona no pasa por acá — tiene su propia colisión en `walker.rs`.
+fn camera_from(preset: &CameraPreset, bounds: &[(Vec3, Vec3)]) -> Camera {
+    Camera::new(preset.eye, preset.target, Vec3::new(0.0, 1.0, 0.0)).with_bounds(bounds)
 }
 
 /// `--snapshot <carpeta> [--width W] [--height H] [--ss N] [--view nombre]`: renderiza
 /// las vistas predefinidas de la escena a PNG, sin abrir ventana. Sirve para revisar
 /// la escena sin estar frente a la pantalla, y como base para los frames del video.
-fn run_snapshot(presets: &[CameraPreset], lights: &[Light], textures: &TextureBank, objects: &[Box<dyn RayIntersect>], args: &[String]) {
+fn run_snapshot(presets: &[CameraPreset], bounds: &[(Vec3, Vec3)], lights: &[Light], textures: &TextureBank, objects: &[Box<dyn RayIntersect>], args: &[String]) {
     let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1));
     let dir = flag("--snapshot").expect("falta la carpeta de salida después de --snapshot");
     let width: usize = flag("--width").map_or(1280, |v| v.parse().expect("--width inválido"));
@@ -353,7 +412,8 @@ fn run_snapshot(presets: &[CameraPreset], lights: &[Light], textures: &TextureBa
     std::fs::create_dir_all(dir).expect("no se pudo crear la carpeta de salida");
     for preset in presets.iter().filter(|p| only.is_none_or(|v| v == p.name)) {
         let start = Instant::now();
-        let pixels = render_supersampled(width, height, ss, objects, &camera_from(preset), lights, textures);
+        let mut pixels = render_supersampled(width, height, ss, objects, &camera_from(preset, bounds), lights, textures);
+        post::apply(&mut pixels, width, height);
         let image = image::RgbImage::from_fn(width as u32, height as u32, |x, y| {
             let px = pixels[y as usize * width + x as usize];
             image::Rgb([(px >> 16) as u8, (px >> 8) as u8, px as u8])
@@ -364,60 +424,58 @@ fn run_snapshot(presets: &[CameraPreset], lights: &[Light], textures: &TextureBa
     }
 }
 
-fn run_window(presets: &[CameraPreset], lights: &[Light], textures: &TextureBank, objects: &[Box<dyn RayIntersect>]) {
+/// Qué le falta a la imagen de la ventana.
+#[derive(Clone, Copy)]
+enum Pending {
+    /// La cámara se movió: vista previa a media resolución.
+    Preview,
+    /// La cámara quedó quieta: calidad completa, de a franjas desde `row`, fuera de la
+    /// pantalla (en `sharp`). Recién cuando está entera, con los retoques, reemplaza a la
+    /// vista previa de una sola vez: sin barrido de franjas ni salto al final.
+    Full { row: usize, millis: u128 },
+    /// Al día.
+    Done,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_window(presets: &[CameraPreset], bounds: &[(Vec3, Vec3)], walk_spawn: Spawn, lights: &[Light], textures: &TextureBank, objects: &[Box<dyn RayIntersect>], skip_intro: bool) {
     let (display_w, display_h) = (WIDTH * DISPLAY_SCALE, HEIGHT * DISPLAY_SCALE);
     let mut window = Window::new("Diorama Raytracer", display_w, display_h, WindowOptions::default()).expect("no se pudo abrir la ventana");
     window.set_target_fps(60);
 
+    // La placa de título y la escena de introducción (opcional, ver `intro.rs`); si el
+    // usuario cierra la ventana ahí, no hay que seguir.
+    if !skip_intro && !intro::show(&mut window, display_w, display_h) {
+        return;
+    }
+
     let mut preset_index = 0;
-    let mut camera = camera_from(&presets[preset_index]);
+    let mut camera = camera_from(&presets[preset_index], bounds);
+    let mut walker = Walker::new(walk_spawn);
+    let mut walking = false;
 
     let mut interactive = vec![0u32; WIDTH * HEIGHT];
     let mut display = vec![0u32; display_w * display_h];
+    let mut sharp = vec![0u32; display_w * display_h];
 
     let mut last_mouse: Option<(f32, f32)> = None;
     let mut last_frame = Instant::now();
-    // `Some(false)` = hay que renderizar rápido (la cámara se movió); `Some(true)` = la
-    // cámara quedó quieta, falta el render de calidad completa; `None` = al día.
-    let mut pending: Option<bool> = Some(false);
+    let mut pending = Pending::Preview;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         let now = Instant::now();
         let dt = (now - last_frame).as_secs_f32();
         last_frame = now;
         let mut moved = false;
+        let key_axis = |pos: Key, neg: Key| (window.is_key_down(pos) as i32 - window.is_key_down(neg) as i32) as f32;
 
-        // C: siguiente vista predefinida (exterior, frente, aérea, ábside, interior).
-        if window.is_key_pressed(Key::C, KeyRepeat::No) {
-            preset_index = (preset_index + 1) % presets.len();
-            camera = camera_from(&presets[preset_index]);
-            moved = true;
-        }
-
-        // Órbita con teclado (igual que el curso: flechas) como respaldo accesible.
-        let keys = [(Key::Left, -1.0, 0.0), (Key::Right, 1.0, 0.0), (Key::Up, 0.0, -1.0), (Key::Down, 0.0, 1.0)];
-        for (key, yaw, pitch) in keys {
-            if window.is_key_down(key) {
-                camera.orbit(yaw * ORBIT_SPEED * dt, pitch * ORBIT_SPEED * dt);
-                moved = true;
-            }
-        }
-        if window.is_key_down(Key::W) || window.is_key_down(Key::Equal) {
-            camera.zoom(-camera.radius() * ZOOM_SPEED * dt);
-            moved = true;
-        }
-        if window.is_key_down(Key::S) || window.is_key_down(Key::Minus) {
-            camera.zoom(camera.radius() * ZOOM_SPEED * dt);
-            moved = true;
-        }
-
-        // Órbita arrastrando el mouse con el botón izquierdo, zoom con la rueda.
+        // Arrastre del mouse con el botón izquierdo: orbita, o mira en primera persona.
+        let mut drag = None;
         if window.get_mouse_down(MouseButton::Left) {
             if let Some((mx, my)) = window.get_mouse_pos(MouseMode::Pass) {
                 if let Some((lx, ly)) = last_mouse {
                     if mx != lx || my != ly {
-                        camera.orbit((mx - lx) * MOUSE_ORBIT_SPEED, (my - ly) * MOUSE_ORBIT_SPEED);
-                        moved = true;
+                        drag = Some((mx - lx, my - ly));
                     }
                 }
                 last_mouse = Some((mx, my));
@@ -425,36 +483,113 @@ fn run_window(presets: &[CameraPreset], lights: &[Light], textures: &TextureBank
         } else {
             last_mouse = None;
         }
-        if let Some((_, scroll)) = window.get_scroll_wheel() {
-            if scroll != 0.0 {
-                camera.zoom(-scroll.signum() * camera.radius() * WHEEL_ZOOM);
-                moved = true;
+
+        // F: entra/sale de la exploración en primera persona (retoma donde quedó).
+        if window.is_key_pressed(Key::F, KeyRepeat::No) {
+            walking = !walking;
+            if walking {
+                walker.apply_to(&mut camera);
+            } else {
+                camera = camera_from(&presets[preset_index], bounds);
             }
+            moved = true;
         }
 
+        if walking {
+            if window.is_key_pressed(Key::R, KeyRepeat::No) {
+                walker.respawn();
+                moved = true;
+            }
+            let (turn, tilt) = (key_axis(Key::Left, Key::Right), key_axis(Key::Up, Key::Down));
+            if turn != 0.0 || tilt != 0.0 {
+                walker.look(turn * WALK_TURN_SPEED * dt, tilt * WALK_TURN_SPEED * dt);
+                moved = true;
+            }
+            if let Some((dx, dy)) = drag {
+                walker.look(-dx * MOUSE_ORBIT_SPEED, -dy * MOUSE_ORBIT_SPEED);
+                moved = true;
+            }
+            let input = MoveInput {
+                forward: key_axis(Key::W, Key::S),
+                right: key_axis(Key::D, Key::A),
+                run: window.is_key_down(Key::LeftShift) || window.is_key_down(Key::RightShift),
+                jump: window.is_key_pressed(Key::Space, KeyRepeat::No),
+            };
+            moved |= walker.update(dt, &input, objects);
+            if moved {
+                walker.apply_to(&mut camera);
+            }
+        } else {
+            // C: siguiente vista predefinida (exterior, frente, aérea, ábside, interior).
+            if window.is_key_pressed(Key::C, KeyRepeat::No) {
+                preset_index = (preset_index + 1) % presets.len();
+                camera = camera_from(&presets[preset_index], bounds);
+                moved = true;
+            }
+
+            // Órbita con teclado (igual que el curso: flechas) como respaldo accesible.
+            let keys = [(Key::Left, -1.0, 0.0), (Key::Right, 1.0, 0.0), (Key::Up, 0.0, -1.0), (Key::Down, 0.0, 1.0)];
+            for (key, yaw, pitch) in keys {
+                if window.is_key_down(key) {
+                    camera.orbit(yaw * ORBIT_SPEED * dt, pitch * ORBIT_SPEED * dt);
+                    moved = true;
+                }
+            }
+            if window.is_key_down(Key::W) || window.is_key_down(Key::Equal) {
+                camera.zoom(-camera.radius() * ZOOM_SPEED * dt);
+                moved = true;
+            }
+            if window.is_key_down(Key::S) || window.is_key_down(Key::Minus) {
+                camera.zoom(camera.radius() * ZOOM_SPEED * dt);
+                moved = true;
+            }
+            if let Some((dx, dy)) = drag {
+                camera.orbit(dx * MOUSE_ORBIT_SPEED, dy * MOUSE_ORBIT_SPEED);
+                moved = true;
+            }
+            if let Some((_, scroll)) = window.get_scroll_wheel() {
+                if scroll != 0.0 {
+                    camera.zoom(-scroll.signum() * camera.radius() * WHEEL_ZOOM);
+                    moved = true;
+                }
+            }
+        }
+        let mode = if walking { "primera persona (F: salir, WASD, flechas/arrastrar: mirar, Shift: correr, Espacio: saltar, R: reaparecer)" } else { "orbital (F: primera persona)" };
+
         if moved {
-            pending = Some(false);
+            pending = Pending::Preview;
         }
 
         match pending {
-            Some(false) => {
+            Pending::Preview => {
                 let start = Instant::now();
                 render(&mut interactive, WIDTH, HEIGHT, objects, &camera, lights, textures);
+                post::apply(&mut interactive, WIDTH, HEIGHT);
                 for y in 0..display_h {
                     for x in 0..display_w {
                         display[y * display_w + x] = interactive[(y / DISPLAY_SCALE) * WIDTH + x / DISPLAY_SCALE];
                     }
                 }
-                window.set_title(&format!("Diorama Raytracer - {} ms (moviendo)", start.elapsed().as_millis()));
-                pending = if moved { Some(false) } else { Some(true) };
+                window.set_title(&format!("Diorama Raytracer - {mode} - {} ms (moviendo)", start.elapsed().as_millis()));
+                pending = if moved { Pending::Preview } else { Pending::Full { row: 0, millis: 0 } };
             }
-            Some(true) => {
+            Pending::Full { row, millis } => {
+                // Una franja por vuelta: si la cámara se mueve a mitad de camino, se
+                // abandona y vuelve la vista previa sin esperar al resto.
                 let start = Instant::now();
-                render(&mut display, display_w, display_h, objects, &camera, lights, textures);
-                window.set_title(&format!("Diorama Raytracer - {} ms (calidad completa)", start.elapsed().as_millis()));
-                pending = None;
+                let end = (row + FULL_BAND).min(display_h);
+                render_rows(&mut sharp[row * display_w..end * display_w], display_w, display_h, row, objects, &camera, lights, textures);
+                let millis = millis + start.elapsed().as_millis();
+                pending = if end < display_h {
+                    Pending::Full { row: end, millis }
+                } else {
+                    post::apply(&mut sharp, display_w, display_h);
+                    display.copy_from_slice(&sharp);
+                    window.set_title(&format!("Diorama Raytracer - {mode} - {millis} ms (calidad completa)"));
+                    Pending::Done
+                };
             }
-            None => {}
+            Pending::Done => {}
         }
 
         window.update_with_buffer(&display, display_w, display_h).expect("fallo actualizando la ventana");
@@ -467,13 +602,18 @@ fn main() {
 
     let start = Instant::now();
     let mut textures = TextureBank::new();
-    let Scene { grids, lights, presets } = scene::church::build(&mut textures);
-    let objects: Vec<Box<dyn RayIntersect>> = grids.into_iter().map(|g| Box::new(g) as Box<dyn RayIntersect>).collect();
+    // La catedral; `--church` abre la iglesia original.
+    let build = if args.iter().any(|a| a == "--church") { scene::church::build } else { scene::cathedral::build };
+    let Scene { grids, groups, lights, presets, walk_spawn, camera_bounds } = build(&mut textures);
+    let objects = scene::into_objects(grids, groups);
     println!("escena construida en {:.2}s, {} luces", start.elapsed().as_secs_f32(), lights.len());
 
     if args.iter().any(|a| a == "--snapshot") {
-        run_snapshot(&presets, &lights, &textures, &objects, &args);
+        run_snapshot(&presets, &camera_bounds, &lights, &textures, &objects, &args);
     } else {
-        run_window(&presets, &lights, &textures, &objects);
+        // `--no-intro` salta la placa de título y la escena de introducción: para iterar
+        // rápido durante el desarrollo sin tener que apretar una tecla cada vez.
+        let skip_intro = args.iter().any(|a| a == "--no-intro");
+        run_window(&presets, &camera_bounds, walk_spawn, &lights, &textures, &objects, skip_intro);
     }
 }

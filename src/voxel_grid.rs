@@ -21,12 +21,15 @@ pub struct VoxelGrid {
     pub origin: Vec3,
     cells: Vec<u8>,
     palette: Vec<Material>,
+    /// Normales suavizadas por celda (vacío = se usa la cara del cubo). Ver
+    /// `smooth_normals`.
+    normals: Vec<[i8; 3]>,
 }
 
 impl VoxelGrid {
     pub fn new(dims: (usize, usize, usize), cell_size: f32, origin: Vec3) -> Self {
         let count = dims.0 * dims.1 * dims.2;
-        VoxelGrid { dims, cell_size, origin, cells: vec![AIR; count], palette: Vec::new() }
+        VoxelGrid { dims, cell_size, origin, cells: vec![AIR; count], palette: Vec::new(), normals: Vec::new() }
     }
 
     fn index(&self, x: usize, y: usize, z: usize) -> usize {
@@ -83,6 +86,103 @@ impl VoxelGrid {
 
     pub fn is_occupied(&self, x: isize, y: isize, z: isize) -> bool {
         self.cell_id(x, y, z) != AIR
+    }
+
+    /// Oclusión ambiental horneada en el color: cada celda de superficie se oscurece
+    /// según cuánto la rodea su propio volumen (cuántas de las celdas a menos de
+    /// `radius` están ocupadas). Una cara plana no cambia; un pliegue de la tela, una
+    /// axila, la cuenca de un ojo o la comisura de la boca se oscurecen, como la sombra
+    /// que junta el polvo en una escultura. Sin esto, con una sola luz, una figura de un
+    /// solo color se lee como una silueta plana. Los materiales transparentes (el velo) y
+    /// los que emiten luz no se tocan. Los tonos se cuantizan para no llenar la paleta.
+    pub fn bake_occlusion(&mut self, radius: isize, strength: f32) {
+        let (w, h, d) = (self.dims.0 as isize, self.dims.1 as isize, self.dims.2 as isize);
+        let total = ((2 * radius + 1).pow(3)) as f32;
+        let flat = (radius + 1) as f32 / (2 * radius + 1) as f32; // ocupación de una cara plana
+        let mut shaded = self.cells.clone();
+        for z in 0..d {
+            for y in 0..h {
+                for x in 0..w {
+                    let id = self.cell_id(x, y, z);
+                    if id == AIR {
+                        continue;
+                    }
+                    let material = self.material_of(id);
+                    if material.albedo[3] > 0.0 || material.emission > 0.0 {
+                        continue;
+                    }
+                    let exposed = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)]
+                        .iter()
+                        .any(|&(dx, dy, dz)| !self.is_occupied(x + dx, y + dy, z + dz));
+                    if !exposed {
+                        continue;
+                    }
+                    let mut filled = 0;
+                    for dz in -radius..=radius {
+                        for dy in -radius..=radius {
+                            for dx in -radius..=radius {
+                                filled += self.is_occupied(x + dx, y + dy, z + dz) as usize;
+                            }
+                        }
+                    }
+                    let shade = (1.0 - strength * (filled as f32 / total - flat)).clamp(0.45, 1.0);
+                    let shade = (shade * 10.0).round() / 10.0;
+                    if shade < 1.0 {
+                        let darker = Material { diffuse: material.diffuse * shade, glow: material.glow * shade, ..material };
+                        shaded[self.index(x as usize, y as usize, z as usize)] = self.material_id(darker);
+                    }
+                }
+            }
+        }
+        self.cells = shaded;
+    }
+
+    /// Normales suavizadas para las figuras esculpidas: cada celda de superficie guarda la
+    /// dirección contraria a la masa que la rodea (a menos de `radius` celdas), así la luz
+    /// sigue la forma esculpida (el hombro redondo, la tela que cae) y no la escalera de
+    /// cubos: sin esto, una superficie inclinada se ve rayada, cada escalón con su cara de
+    /// arriba iluminada y la de adelante oscura. La silueta sigue siendo de vóxeles; solo
+    /// cambia cómo se ilumina. Las celdas transparentes (el velo) quedan con la cara.
+    pub fn smooth_normals(&mut self, radius: isize) {
+        let (w, h, d) = (self.dims.0 as isize, self.dims.1 as isize, self.dims.2 as isize);
+        let mut normals = vec![[0i8; 3]; self.cells.len()];
+        for z in 0..d {
+            for y in 0..h {
+                for x in 0..w {
+                    let id = self.cell_id(x, y, z);
+                    if id == AIR || self.material_of(id).albedo[3] > 0.0 {
+                        continue;
+                    }
+                    let mut away = Vec3::zeros();
+                    let mut exposed = false;
+                    for dz in -radius..=radius {
+                        for dy in -radius..=radius {
+                            for dx in -radius..=radius {
+                                if dx * dx + dy * dy + dz * dz > radius * radius {
+                                    continue;
+                                }
+                                if self.is_occupied(x + dx, y + dy, z + dz) {
+                                    away -= Vec3::new(dx as f32, dy as f32, dz as f32);
+                                } else if dx.abs() + dy.abs() + dz.abs() == 1 {
+                                    exposed = true;
+                                }
+                            }
+                        }
+                    }
+                    if exposed && away.magnitude() > 1e-3 {
+                        let n = away.normalize() * 127.0;
+                        normals[self.index(x as usize, y as usize, z as usize)] = [n.x as i8, n.y as i8, n.z as i8];
+                    }
+                }
+            }
+        }
+        self.normals = normals;
+    }
+
+    /// Caja envolvente en mundo: `(mínimo, máximo)`.
+    pub fn bounds(&self) -> (Vec3, Vec3) {
+        let extent = Vec3::new(self.dims.0 as f32, self.dims.1 as f32, self.dims.2 as f32) * self.cell_size;
+        (self.origin, self.origin + extent)
     }
 
     /// Convierte una posición de mundo a índices de celda (sin clamping).
@@ -173,7 +273,6 @@ impl VoxelGrid {
         t_exit: f32,
         stop: impl Fn(u8) -> bool,
     ) -> Option<(f32, usize, u8)> {
-        let (mut ix, mut iy, mut iz) = start;
         let step = |d: f32| -> isize {
             if d > 0.0 {
                 1
@@ -183,48 +282,77 @@ impl VoxelGrid {
                 0
             }
         };
-        let (sx, sy, sz) = (step(ray_direction.x), step(ray_direction.y), step(ray_direction.z));
+        let steps = [step(ray_direction.x), step(ray_direction.y), step(ray_direction.z)];
+        let dims = [self.dims.0 as isize, self.dims.1 as isize, self.dims.2 as isize];
+        // Cuánto avanza el índice lineal de `cells` al pasar a la celda vecina en cada eje:
+        // se lleva el índice al día sumando, sin volver a multiplicar en cada paso.
+        let strides = [steps[0], steps[1] * dims[0], steps[2] * dims[0] * dims[1]];
+        let mut cell = [start.0, start.1, start.2];
+        let mut index = (start.2 * dims[1] + start.1) * dims[0] + start.0;
 
-        let (mut tx, dx) = Self::axis_step(ray_origin.x, ray_direction.x, ix, self.origin.x, self.cell_size, t_enter);
-        let (mut ty, dy) = Self::axis_step(ray_origin.y, ray_direction.y, iy, self.origin.y, self.cell_size, t_enter);
-        let (mut tz, dz) = Self::axis_step(ray_origin.z, ray_direction.z, iz, self.origin.z, self.cell_size, t_enter);
+        let (tx, dx) = Self::axis_step(ray_origin.x, ray_direction.x, start.0, self.origin.x, self.cell_size, t_enter);
+        let (ty, dy) = Self::axis_step(ray_origin.y, ray_direction.y, start.1, self.origin.y, self.cell_size, t_enter);
+        let (tz, dz) = Self::axis_step(ray_origin.z, ray_direction.z, start.2, self.origin.z, self.cell_size, t_enter);
+        let (mut t_max, t_delta) = ([tx, ty, tz], [dx, dy, dz]);
 
         loop {
             // Avanza por el eje cuyo próximo cruce de celda está más cerca — la
             // esencia de Amanatides-Woo: caminar celda por celda siguiendo la línea
             // recta del rayo, sin visitar ninguna celda que el rayo no atraviese.
-            let (axis, t_next) = if tx <= ty && tx <= tz {
-                ix += sx;
-                tx += dx;
-                (0, tx - dx)
-            } else if ty <= tz {
-                iy += sy;
-                ty += dy;
-                (1, ty - dy)
+            let axis = if t_max[0] <= t_max[1] && t_max[0] <= t_max[2] {
+                0
+            } else if t_max[1] <= t_max[2] {
+                1
             } else {
-                iz += sz;
-                tz += dz;
-                (2, tz - dz)
+                2
             };
-
+            let t_next = t_max[axis];
             if t_next > t_exit {
                 return None;
             }
-            if !self.in_bounds(ix, iy, iz) {
+            t_max[axis] += t_delta[axis];
+            cell[axis] += steps[axis];
+            index += strides[axis];
+            // Solo cambió un eje: basta con mirar ese para saber si se salió del grid.
+            if cell[axis] < 0 || cell[axis] >= dims[axis] {
                 return if stop(AIR) { Some((t_next, axis, AIR)) } else { None };
             }
 
-            let id = self.cells[self.index(ix as usize, iy as usize, iz as usize)];
+            let id = self.cells[index as usize];
             if stop(id) {
                 return Some((t_next, axis, id));
             }
         }
     }
 
-    fn hit(&self, ray_origin: &Vec3, ray_direction: &Vec3, t: f32, normal: Vec3, id: u8) -> Intersect {
+    fn hit(&self, ray_origin: &Vec3, ray_direction: &Vec3, t: f32, face: Vec3, id: u8) -> Intersect {
         let point = ray_origin + ray_direction * t;
-        let (u, v) = face_uv(&point, &normal, self.cell_size);
-        Intersect { point, normal, distance: t, material: self.material_of(id), u, v }
+        let (u, v) = face_uv(&point, &face, self.cell_size);
+        Intersect { point, normal: self.smooth_normal(&point, face), distance: t, material: self.material_of(id), u, v }
+    }
+
+    /// La normal suavizada de la celda tocada en `point` por su cara `face`, si la hay,
+    /// inclinada hacia la cara cuando casi la contradice (para que los rayos de sombra y
+    /// de reflejo sigan saliendo del lado correcto del cubo).
+    fn smooth_normal(&self, point: &Vec3, face: Vec3) -> Vec3 {
+        if self.normals.is_empty() {
+            return face;
+        }
+        let (x, y, z) = self.world_to_cell(point - face * (0.5 * self.cell_size));
+        if !self.in_bounds(x, y, z) {
+            return face;
+        }
+        let [nx, ny, nz] = self.normals[self.index(x as usize, y as usize, z as usize)];
+        if nx == 0 && ny == 0 && nz == 0 {
+            return face;
+        }
+        let smooth = Vec3::new(nx as f32, ny as f32, nz as f32).normalize();
+        let along = smooth.dot(&face);
+        if along < 0.3 {
+            (smooth + face * (0.3 - along) * 1.5).normalize()
+        } else {
+            smooth
+        }
     }
 }
 
@@ -235,7 +363,17 @@ fn axis_normal(axis: usize, sign: f32) -> Vec3 {
 }
 
 impl RayIntersect for VoxelGrid {
+    fn entry_distance(&self, ray_origin: &Vec3, ray_direction: &Vec3) -> Option<f32> {
+        self.intersect_bounds(ray_origin, ray_direction).map(|(t, _, _)| t)
+    }
+
     fn ray_intersect(&self, ray_origin: &Vec3, ray_direction: &Vec3) -> Option<Intersect> {
+        self.ray_intersect_within(ray_origin, ray_direction, f32::INFINITY)
+    }
+
+    /// El DDA se corta en `max_distance`: un rayo de sombra hacia una vela no sigue
+    /// recorriendo el grid más allá de la llama.
+    fn ray_intersect_within(&self, ray_origin: &Vec3, ray_direction: &Vec3, max_distance: f32) -> Option<Intersect> {
         // Caso especial: el rayo arranca DENTRO de una celda ocupada. Solo pasa con el
         // rayo refractado que sigue viajando adentro de un material transparente (ver
         // `offset_origin` en `main.rs`, que lo ubica a propósito del lado del vidrio).
@@ -247,7 +385,7 @@ impl RayIntersect for VoxelGrid {
         let start = self.world_to_cell(*ray_origin);
         let start_id = self.cell_id(start.0, start.1, start.2);
         if start_id != AIR {
-            let (t, axis, _) = self.march(ray_origin, ray_direction, start, 0.0, f32::INFINITY, |id| id != start_id)?;
+            let (t, axis, _) = self.march(ray_origin, ray_direction, start, 0.0, max_distance, |id| id != start_id)?;
             // Normal de SALIDA: apunta EN la dirección del avance (es la cara de atrás
             // del material que se está dejando, "afuera" es hacia donde el rayo ya va).
             let normal = axis_normal(axis, ray_direction[axis].signum());
@@ -255,6 +393,9 @@ impl RayIntersect for VoxelGrid {
         }
 
         let (t_enter, t_exit, entry_normal) = self.intersect_bounds(ray_origin, ray_direction)?;
+        if t_enter >= max_distance {
+            return None;
+        }
 
         let entry_point = ray_origin + ray_direction * (t_enter + 1e-4);
         let local = (entry_point - self.origin) / self.cell_size;
@@ -271,10 +412,19 @@ impl RayIntersect for VoxelGrid {
             return Some(self.hit(ray_origin, ray_direction, t_enter, entry_normal, entry_id));
         }
 
-        let (t, axis, id) = self.march(ray_origin, ray_direction, entry, t_enter, t_exit, |id| id != AIR)?;
+        let (t, axis, id) = self.march(ray_origin, ray_direction, entry, t_enter, t_exit.min(max_distance), |id| id != AIR)?;
         // Normal de ENTRADA: apunta contra el avance, hacia afuera del sólido tocado.
         let normal = axis_normal(axis, -ray_direction[axis].signum());
         Some(self.hit(ray_origin, ray_direction, t, normal, id))
+    }
+
+    fn overlaps_box(&self, min: &Vec3, max: &Vec3) -> bool {
+        let lo = self.world_to_cell(*min);
+        let hi = self.world_to_cell(*max);
+        if hi.0 < 0 || hi.1 < 0 || hi.2 < 0 || lo.0 >= self.dims.0 as isize || lo.1 >= self.dims.1 as isize || lo.2 >= self.dims.2 as isize {
+            return false;
+        }
+        (lo.2..=hi.2).any(|z| (lo.1..=hi.1).any(|y| (lo.0..=hi.0).any(|x| self.is_occupied(x, y, z))))
     }
 }
 

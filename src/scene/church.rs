@@ -21,6 +21,7 @@ use crate::scene::{CameraPreset, Scene};
 use crate::skybox;
 use crate::texture::TextureBank;
 use crate::voxel_grid::VoxelGrid;
+use crate::walker::Spawn;
 use nalgebra_glm::Vec3;
 
 const MARGIN: isize = 20; // 5 u de plaza alrededor de la iglesia
@@ -254,7 +255,7 @@ impl Builder<'_> {
         // Rosetón: 4.5 u de diámetro, centrado en la torre a 13 u de altura, con un
         // aro de piedra que sobresale de la fachada.
         let (rose_along, rose_y) = ((OX + W / 2) as f32, (FLOOR_Y + 52) as f32);
-        place_rose_window(self.grid, Axis::Z, front, rose_along, rose_y, 9.0, 8, m.stone, m.glass);
+        place_rose_window(self.grid, Axis::Z, front, rose_along, rose_y, 9.0, 8, m.stone, Some(m.glass));
         for du in -11..=11 {
             for dv in -11..=11 {
                 let r = ((du as f32 + 0.5).powi(2) + (dv as f32 + 0.5).powi(2)).sqrt();
@@ -543,5 +544,12 @@ pub fn build(textures: &mut TextureBank) -> Scene {
         },
     ];
 
-    Scene { grids, lights, presets }
+    // Primera persona: en el pasillo central, recién pasado el arco de la torre, mirando
+    // al altar. El plano está a 4 celdas por metro.
+    let walk_spawn = Spawn { feet: Vec3::new(aisle_x, FLOOR_Y as f32, (OZ + 36) as f32), yaw: 0.0, units_per_meter: 4.0 };
+
+    // Esta iglesia sí tiene vistas exteriores a propósito ("exterior", "frente", "aerea",
+    // "abside"), con la cámara bien afuera del edificio — a diferencia de la catedral, acá
+    // no hay un volumen "adentro" al que limitar la cámara orbital.
+    Scene { grids, groups: Vec::new(), lights, presets, walk_spawn, camera_bounds: Vec::new() }
 }

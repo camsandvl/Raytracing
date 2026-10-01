@@ -8,9 +8,12 @@ use crate::color::Color;
 use nalgebra_glm::Vec3;
 
 /// Dirección hacia la luna — la usa el cielo para dibujarla y la escena para su luz
-/// direccional, así la luna que se ve y la luz que proyecta siempre coinciden.
+/// direccional, así la luna que se ve y la luz que proyecta siempre coinciden. Baja en
+/// el este (+Z, 25° sobre el horizonte): en la catedral entra por el vitral del ábside
+/// y su luz de colores cae sobre los novios, en el sol del crucero, 16 m más al oeste.
 pub fn moon_direction() -> Vec3 {
-    Vec3::new(0.6, 0.55, -0.6).normalize()
+    let elevation = 25f32.to_radians();
+    Vec3::new(0.0, elevation.sin(), elevation.cos())
 }
 
 pub fn sample(dir: &Vec3) -> Color {

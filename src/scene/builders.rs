@@ -105,7 +105,8 @@ pub fn carve_pointed_arch_opening(
 /// center_y)` sobre el plano del muro: cubo central, anillo intermedio y aro exterior
 /// de piedra, con `petal_count` rayos dividiendo los pétalos de vidrio — la silueta de
 /// los renders de referencia simplificada a bloques. La tracería atraviesa todo el
-/// espesor del muro; el vidrio es un panel en la capa central.
+/// espesor del muro; el vidrio (si hay) es un panel en la capa central, y sin vidrio
+/// los pétalos quedan abiertos al cielo.
 #[allow(clippy::too_many_arguments)]
 pub fn place_rose_window(
     grid: &mut VoxelGrid,
@@ -116,7 +117,7 @@ pub fn place_rose_window(
     radius: f32,
     petal_count: usize,
     frame: Material,
-    glass: Material,
+    glass: Option<Material>,
 ) {
     let pane = (thickness_range.0 + thickness_range.1 - 1) / 2;
     let bound = radius.ceil() as isize + 1;
@@ -144,12 +145,10 @@ pub fn place_rose_window(
             let y = (center_y + dv as f32).floor() as isize;
             for t in thickness_range.0..thickness_range.1 {
                 let (x, yy, z) = wall_cell(axis, t, along, y);
-                if is_frame {
-                    set_checked(grid, x, yy, z, frame);
-                } else if t == pane {
-                    set_checked(grid, x, yy, z, glass);
-                } else {
-                    clear_checked(grid, x, yy, z);
+                match glass {
+                    _ if is_frame => set_checked(grid, x, yy, z, frame),
+                    Some(glass) if t == pane => set_checked(grid, x, yy, z, glass),
+                    _ => clear_checked(grid, x, yy, z),
                 }
             }
         }
