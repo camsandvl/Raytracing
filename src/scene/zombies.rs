@@ -672,6 +672,10 @@ fn dip_zombie(bride: &Skeleton, points: &people::BrideDip, feet: Vec3, side: Vec
         let look = (toward * 0.5 - UP * 0.8).normalize();
         let pose = Pose { pelvis: Vec3::zeros(), up, front, arms: [(-UP, -UP); 2], legs: [(-UP, -UP); 2], look };
         let mut zombie = Skeleton::new(&pose, 1.8, Build::Corpse);
+        // Más visible desde la nave, sin cambiarle la pose: la cabeza más grande y los
+        // brazos más gruesos.
+        zombie.head_scale = 1.2;
+        zombie.arm_scale = 1.4;
         zombie.turn_head(look, up);
         let mouth = anatomy::face(&zombie).mouth;
         zombie.shift(points.bite - mouth + side * (0.01 * M));
@@ -771,9 +775,10 @@ fn sculpted_zombie(c: &mut Canvas, m: &MaterialSet, sk: &Skeleton, seed: u32) {
 
     // La cara: cuencas vacías, la boca ensangrentada y dos hileras de dientes, con huecos.
     let f = anatomy::face(sk);
-    let mut layers = vec![skin, guts, Layer::solid(f.eyes.iter().map(|&e| Shape::sphere(e, 0.021 * k)).collect(), m.soot), Layer::solid(vec![Shape::sphere(f.mouth_back, 0.032 * k)], m.blood)];
+    let hk = k * sk.head_scale;
+    let mut layers = vec![skin, guts, Layer::solid(f.eyes.iter().map(|&e| Shape::sphere(e, 0.021 * hk)).collect(), m.soot), Layer::solid(vec![Shape::sphere(f.mouth_back, 0.032 * hk)], m.blood)];
     let rows = [sk.head_at(-0.068, 0.088, 0.0), sk.head_at(-0.124, 0.072, 0.0)];
-    let teeth = Layer::new(rows.iter().map(|&r| Shape::block(r, sk.head_axes(), Vec3::new(0.026, 0.008, 0.012) * k, 0.0)).collect(), move |p| {
+    let teeth = Layer::new(rows.iter().map(|&r| Shape::block(r, sk.head_axes(), Vec3::new(0.026, 0.008, 0.012) * hk, 0.0)).collect(), move |p| {
         let cell = p / SCULPT_DETAIL;
         (hash(cell.x as isize * 17, cell.y as isize + cell.z as isize * 53, seed) > 0.25).then_some(m.bone_moss)
     });

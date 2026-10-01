@@ -1,13 +1,15 @@
 //! La placa de título y la escena de introducción de la intro, antes del diorama: dos
 //! imágenes generadas aparte (con Manus, a partir de referencias del autor), que se
-//! muestran una tras otra hasta que se aprieta cualquier tecla. El autor pidió el
+//! muestran una tras otra hasta que se aprieta cualquier tecla. La placa ocupa toda la
+//! pantalla; la escena es "la foto": centrada sobre negro, con sus proporciones, y el
+//! cartel debajo, fuera de la foto. El autor pidió el
 //! mecanismo y el cartel de aviso ("PRESS ANY KEY..."); las imágenes las pone él — ver
 //! `TITLE_PATH`/`SCENE_PATH` para dónde van, y el mensaje final del cambio para el
 //! formato esperado.
 //!
-//! Después de la foto, antes del diorama, una pantalla negra con un aviso ominoso
-//! ("...WAIT. DID YOU HEAR THAT?") que aparece de a poco y sigue sola al diorama — que
-//! arranca en el vitral reventado por los zombis.
+//! Al apretar una tecla sobre la foto, salta el flash de la cámara (un blanco que se
+//! apaga en negro, sin texto: el flash es el "click") y arranca el diorama — la misma
+//! boda, un instante después.
 //!
 //! Es un agregado opcional, igual que el modo primera persona: si todavía no están los
 //! archivos, se saltea sin romper nada (ni en `cargo run` ni en los tests).
@@ -23,62 +25,94 @@ const SCENE_PATH: &str = "assets/intro/scene.png";
 const TITLE_MESSAGE: &str = "PRESS ANY KEY TO CONTINUE";
 const SCENE_MESSAGE: &str = "SAY CHEESE! PRESS ANY KEY TO TAKE THEIR HAPPY DAY PICTURE";
 const TEXT_SCALE: usize = 3;
-/// La pantalla negra entre la foto y el diorama: el texto aparece desde el negro en
-/// `OMEN_FADE` y el diorama arranca solo a los `OMEN_TOTAL` (cualquier tecla lo
-/// adelanta). Sin cartel de "apretá una tecla": a esta altura ya se sabe.
-const OMEN: &str = "...WAIT. DID YOU HEAR THAT?";
-const OMEN_SCALE: usize = 4;
-const OMEN_FADE: Duration = Duration::from_millis(2000);
-const OMEN_TOTAL: Duration = Duration::from_millis(4000);
+/// La foto de la escena ocupa, como mucho, esta fracción del alto y del ancho de la
+/// ventana (con sus proporciones); el cartel va debajo, a `PHOTO_GAP` píxeles.
+const PHOTO_HEIGHT: f32 = 0.48;
+const PHOTO_WIDTH: f32 = 0.56;
+const PHOTO_GAP: usize = 28;
+/// El flash de la cámara después de la foto: blanco pleno durante `FLASH_HOLD` y después
+/// se apaga hasta negro en `FLASH_FADE`.
+const FLASH_HOLD: Duration = Duration::from_millis(90);
+const FLASH_FADE: Duration = Duration::from_millis(650);
 
 /// Muestra las dos imágenes, cada una hasta que se aprieta cualquier tecla, reusando la
 /// `window` que después sigue con el diorama (sin parpadeo de abrir una ventana nueva).
 /// Devuelve `false` si el usuario cerró la ventana durante la intro — en ese caso no hay
 /// que seguir al diorama.
 pub fn show(window: &mut Window, width: usize, height: usize) -> bool {
-    for (path, message) in [(TITLE_PATH, TITLE_MESSAGE), (SCENE_PATH, SCENE_MESSAGE)] {
-        let Some(mut frame) = load_scaled(path, width, height) else {
+    let title = load_scaled(TITLE_PATH, width, height).map(|mut frame| {
+        overlay_message(&mut frame, width, height, TITLE_MESSAGE);
+        frame
+    });
+    let scene = image_size(SCENE_PATH).and_then(|(w, h)| {
+        let (pw, ph) = photo_size(w, h, width, height);
+        load_scaled(SCENE_PATH, pw, ph).map(|photo| photo_frame(&photo, pw, ph, width, height, SCENE_MESSAGE))
+    });
+    for (path, frame) in [(TITLE_PATH, title), (SCENE_PATH, scene)] {
+        let Some(frame) = frame else {
             println!("intro: no se encontró {path}, se saltea esa placa (PNG, cualquier tamaño; se reescala a la ventana)");
             continue;
         };
-        overlay_message(&mut frame, width, height, message);
         if !wait_for_key(window, &frame, width, height) {
             return false;
         }
     }
-    omen(window, width, height)
+    flash(window, width, height)
 }
 
-/// La pantalla negra con el aviso, que aparece de a poco y sigue sola al diorama (o con
-/// cualquier tecla); `false` si se cierra la ventana antes.
-fn omen(window: &mut Window, width: usize, height: usize) -> bool {
+/// El tamaño de la foto en pantalla: la imagen de `w` × `h` agrandada o achicada, con sus
+/// proporciones, hasta llenar `PHOTO_HEIGHT` del alto o `PHOTO_WIDTH` del ancho de la
+/// ventana (lo que llegue primero).
+fn photo_size(w: usize, h: usize, width: usize, height: usize) -> (usize, usize) {
+    let scale = (height as f32 * PHOTO_HEIGHT / h as f32).min(width as f32 * PHOTO_WIDTH / w as f32);
+    (((w as f32 * scale) as usize).max(1), ((h as f32 * scale) as usize).max(1))
+}
+
+/// La pantalla de la foto: negro, la foto de `pw` × `ph` centrada y el cartel debajo (la
+/// foto y el cartel, juntos, centrados en alto).
+fn photo_frame(photo: &[u32], pw: usize, ph: usize, width: usize, height: usize, message: &str) -> Vec<u32> {
+    let mut frame = vec![0u32; width * height];
+    let text_h = font::GLYPH_HEIGHT * TEXT_SCALE;
+    let top = height.saturating_sub(ph + PHOTO_GAP + text_h) / 2;
+    let left = width.saturating_sub(pw) / 2;
+    for y in 0..ph.min(height - top) {
+        let row = (top + y) * width + left;
+        let n = pw.min(width - left);
+        frame[row..row + n].copy_from_slice(&photo[y * pw..y * pw + n]);
+    }
+    let x = width.saturating_sub(font::text_width(message, TEXT_SCALE)) / 2;
+    font::draw_text(&mut frame, width, height, message, x, top + ph + PHOTO_GAP, TEXT_SCALE, 0xFFFFFF);
+    frame
+}
+
+/// El tamaño en píxeles de un PNG, sin decodificarlo entero; `None` si no está.
+fn image_size(path: &str) -> Option<(usize, usize)> {
+    image::image_dimensions(path).ok().map(|(w, h)| (w as usize, h as usize))
+}
+
+/// El flash de la cámara: la pantalla en blanco que se apaga hasta negro; `false` si se
+/// cierra la ventana mientras tanto.
+fn flash(window: &mut Window, width: usize, height: usize) -> bool {
     let start = Instant::now();
+    let mut frame = vec![0u32; width * height];
     while window.is_open() {
         let elapsed = start.elapsed();
-        if elapsed >= OMEN_TOTAL {
+        if elapsed >= FLASH_HOLD + FLASH_FADE {
             return true;
         }
-        let frame = omen_frame(width, height, elapsed.as_secs_f32() / OMEN_FADE.as_secs_f32());
+        let level = flash_level(elapsed);
+        frame.fill(level << 16 | level << 8 | level);
         window.update_with_buffer(&frame, width, height).expect("fallo actualizando la ventana");
-        if !window.get_keys_pressed(KeyRepeat::No).is_empty() {
-            return true;
-        }
         std::thread::sleep(Duration::from_millis(16));
     }
     false
 }
 
-/// Negro, con `OMEN` centrado en gris pálido, a `brightness` (0 = negro, 1 = del todo
-/// visible).
-fn omen_frame(width: usize, height: usize, brightness: f32) -> Vec<u32> {
-    let mut frame = vec![0u32; width * height];
-    let level = (0xD8 as f32 * brightness.clamp(0.0, 1.0)) as u32;
-    if level > 0 {
-        let x = width.saturating_sub(font::text_width(OMEN, OMEN_SCALE)) / 2;
-        let y = height.saturating_sub(font::GLYPH_HEIGHT * OMEN_SCALE) / 2;
-        font::draw_text(&mut frame, width, height, OMEN, x, y, OMEN_SCALE, level << 16 | level << 8 | level);
-    }
-    frame
+/// El brillo del flash (0–255) a `elapsed` de haber saltado: pleno, y después se apaga
+/// rápido al principio y más lento al final, como la luz que queda en el ojo.
+fn flash_level(elapsed: Duration) -> u32 {
+    let fade = (elapsed.saturating_sub(FLASH_HOLD).as_secs_f32() / FLASH_FADE.as_secs_f32()).clamp(0.0, 1.0);
+    (255.0 * (1.0 - fade).powi(2)) as u32
 }
 
 /// Una franja oscurecida al pie de la imagen (para que el texto se lea encima de
@@ -110,11 +144,16 @@ fn wait_for_key(window: &mut Window, frame: &[u32], width: usize, height: usize)
     false
 }
 
-/// Carga un PNG y lo reescala (vecino más cercano) a exactamente `width` × `height`, en
-/// el mismo empaquetado 0xRRGGBB que usa el render. `None` si el archivo no existe o no
-/// se pudo decodificar.
+/// Carga un PNG y lo reescala a exactamente `width` × `height`, en el mismo empaquetado
+/// 0xRRGGBB que usa el render: si hay que achicarla, con un filtro suave (la foto de la
+/// escena se achica casi a un tercio, y por vecino más cercano quedaba serruchada); si
+/// hay que agrandarla, por vecino más cercano. `None` si el archivo no existe o no se
+/// pudo decodificar.
 fn load_scaled(path: &str, width: usize, height: usize) -> Option<Vec<u32>> {
-    let image = image::open(path).ok()?.into_rgb8();
+    let mut image = image::open(path).ok()?.into_rgb8();
+    if (width as u32) < image.width() && (height as u32) < image.height() {
+        image = image::imageops::resize(&image, width as u32, height as u32, image::imageops::FilterType::Triangle);
+    }
     let (src_w, src_h) = (image.width() as usize, image.height() as usize);
     let mut buffer = vec![0u32; width * height];
     for y in 0..height {
@@ -132,17 +171,35 @@ fn load_scaled(path: &str, width: usize, height: usize) -> Option<Vec<u32>> {
 mod tests {
     use super::*;
 
-    /// La pantalla del aviso arranca en negro y termina con el texto visible, centrado.
+    /// El flash arranca en blanco pleno, se apaga sin volver a subir y termina en negro.
     #[test]
-    fn omen_fades_in_from_black_to_centered_text() {
-        let (width, height) = (800, 100); // más ancho que el texto (648 px a esta escala)
-        assert!(omen_frame(width, height, 0.0).iter().all(|&p| p == 0), "arranca en negro");
-        let lit = omen_frame(width, height, 1.0);
-        let columns: Vec<usize> = (0..width).filter(|&x| (0..height).any(|y| lit[y * width + x] != 0)).collect();
-        let (left, right) = (columns[0], width - 1 - columns[columns.len() - 1]);
-        assert!(left.abs_diff(right) <= OMEN_SCALE * 2, "centrado: {left} px a la izquierda, {right} a la derecha");
-        let dim = omen_frame(width, height, 0.5).into_iter().max().unwrap();
-        assert!(dim < lit.into_iter().max().unwrap() && dim > 0, "a mitad del fundido, más tenue");
+    fn the_flash_starts_white_and_fades_to_black() {
+        assert_eq!(flash_level(Duration::ZERO), 255);
+        assert_eq!(flash_level(FLASH_HOLD), 255, "blanco pleno hasta que empieza a apagarse");
+        assert_eq!(flash_level(FLASH_HOLD + FLASH_FADE), 0, "termina en negro");
+        let steps: Vec<u32> = (0..=20).map(|i| flash_level(FLASH_HOLD + FLASH_FADE * i / 20)).collect();
+        assert!(steps.windows(2).all(|w| w[1] <= w[0]), "se apaga sin volver a subir: {steps:?}");
+    }
+
+    /// La foto queda centrada a lo ancho, con negro alrededor, sus proporciones y el
+    /// cartel debajo, fuera de la foto.
+    #[test]
+    fn the_photo_is_centered_on_black_with_the_label_below() {
+        let (width, height) = (1280, 720);
+        let (pw, ph) = photo_size(1536, 1024, width, height);
+        assert_eq!(ph, (720.0 * PHOTO_HEIGHT) as usize, "manda el alto");
+        assert!((pw as f32 / ph as f32 - 1.5).abs() < 0.01, "mantiene las proporciones");
+        let photo = vec![0x808080u32; pw * ph];
+        let frame = photo_frame(&photo, pw, ph, width, height, "SAY CHEESE");
+        let lit = |x: usize, y: usize| frame[y * width + x] != 0;
+        let rows: Vec<usize> = (0..height).filter(|&y| lit(width / 2, y)).collect();
+        let (top, bottom) = (rows[0], rows[rows.len() - 1]);
+        assert!(top > 0 && !lit(0, top + 10) && !lit(width - 1, top + 10), "negro alrededor de la foto");
+        let photo_left = (0..width).find(|&x| lit(x, top + 10)).unwrap();
+        assert_eq!(photo_left, width - pw - photo_left, "centrada a lo ancho");
+        let text_rows: Vec<usize> = (top + ph..height).filter(|&y| (0..width).any(|x| frame[y * width + x] == 0xFFFFFF)).collect();
+        assert!(!text_rows.is_empty() && text_rows[0] >= top + ph + PHOTO_GAP, "el cartel, debajo y fuera de la foto");
+        assert!(bottom < height, "todo entra en la pantalla");
     }
 
     /// Falta el archivo: no revienta, devuelve `None` (lo que hace que `show` lo saltee).

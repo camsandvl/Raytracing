@@ -587,7 +587,7 @@ Cada luz sale de la llama de un prop (fase 5):
     - **El novio:** de 1.80 a 1.88 m, y cadera más angosta (la pelvis y los glúteos masculinos, el pantalón y el saco sobre la cadera, más finos).
 
 32. **Una pantalla negra ominosa entre la foto y el diorama ✅**
-    - Después de "SAY CHEESE!...", antes del diorama (que arranca en el vitral reventado): una pantalla negra con "...WAIT. DID YOU HEAR THAT?" (elegido por el autor entre cuatro opciones), en gris pálido, más grande que los otros carteles.
+    - Después de "SAY CHEESE!...", antes del diorama (que arranca en el vitral reventado): una pantalla negra con "...WAIT. DID YOU HEAR THAT?" (elegido por el autor entre cuatro opciones), en gris pálido (del mismo tamaño que el cartel de la foto, desde la fase 37).
     - El texto aparece desde el negro en 2 s y el diorama arranca solo a los 4 s; cualquier tecla lo adelanta. Sin cartel de "apretá una tecla" (pedido del autor: a esta altura ya se sabe).
     - Es solo código (`intro::omen`, `omen_frame`): no necesita imagen ni toca el render. La tipografía sumó "." y "?". `--no-intro` la saltea junto con el resto de la intro.
     - **Test:** arranca en negro, a mitad del fundido el texto es más tenue y al final queda visible y centrado.
@@ -616,6 +616,21 @@ Cada luz sale de la llama de un prop (fase 5):
     - `suited_father` y `eighties_mother` quedaron generales (`Suit`: tela, corbata o moño, esmoquin o saco con hombreras, pelo; `Dress`: raso, pelo, mangas abullonadas o largas con hombreras), así los cuatro padres se visten con lo mismo.
     - **Fuera el sistema viejo de personas:** `Outfit`, `dressed`, `Neckwear`, `Skirt`, `figure::realistic_body`/`realistic_head`/`hand_shape`, `zombies::feeding` y el material `cloth` ya no los usaba nadie. `figure.rs` queda solo para los zombis de la invasión.
     - **Costo:** armar la escena tarda ~1.5–2.8 s (antes ~1.5 s); las vistas, lo mismo (medido tres veces: las mediciones sueltas varían mucho con la carga de la máquina).
+
+37. **La escena de la intro como foto, y la gitignore ✅**
+    - La imagen de la escena ya no ocupa toda la pantalla: es "la foto", centrada sobre negro con sus proporciones, hasta el 70% del alto (u 80% del ancho), con "SAY CHEESE!..." debajo, fuera de la foto (`intro::photo_size`, `photo_frame`). La placa de título sigue a pantalla completa.
+    - Las imágenes que hay que achicar se achican con un filtro suave (la foto pasa de 2560×1440 a 896×504; por vecino más cercano quedaba serruchada); agrandar sigue siendo por vecino más cercano.
+    - Test: la foto queda centrada, con negro alrededor, con sus proporciones y el cartel debajo y fuera de ella.
+    - Ajuste del autor: la foto, más chica (hasta el 48% del alto o el 56% del ancho: 614×345 en una ventana de 1280×720), y el aviso de la pantalla negra ("...WAIT. DID YOU HEAR THAT?") del mismo tamaño que el cartel de la foto (antes era más grande).
+    - `.gitignore` suma `skills/` y `*.skill` (las skills de Claude no van al repo; `.claude/` ya estaba ignorada).
+
+38. **El aviso de la pantalla negra, en relación con la foto ✅** — Después de "SAY CHEESE! PRESS ANY KEY TO TAKE THEIR HAPPY DAY PICTURE", el aviso ahora sigue a la foto recién sacada: "*CLICK* ...WAIT. THERE'S SOMETHING ELSE IN THE PICTURE." (elegido por el autor entre cuatro; el anterior, "...WAIT. DID YOU HEAR THAT?", no tenía que ver con la foto). La tipografía sumó L, M, G, el apóstrofo y el asterisco. De paso: `font::text_width` contaba una columna de espacio de más después de la última letra, así que todos los carteles centrados quedaban corridos medio glyph a la izquierda.
+
+39. **El aviso, más auténtico ✅** — El autor pidió algo menos "de miedo" y más natural, lo que pensaría de verdad el invitado que sacó la foto: "*CLICK* ...THAT CAME OUT WEIRD. SOMETHING'S IN THE BACK." (elegido entre diez). La tipografía sumó la B.
+
+40. **El flash de la cámara en vez de la pantalla con texto ✅** — El autor sentía el paso foto → pantalla negra con texto → diorama poco natural. Lo más fuerte de la intro es el antes y el después (la foto tranquila, después la masacre); lo que molestaba era la pantalla del medio, que contaba en vez de mostrar. Ahora, al apretar una tecla sobre la foto, salta el flash de la cámara: blanco pleno 90 ms que se apaga hasta negro en 650 ms (rápido al principio, lento al final), sin texto — el flash es el "click" —, y arranca el diorama igual que antes (en el vitral del ábside, pedido del autor). `intro::flash`, `flash_level`; test: arranca en blanco, se apaga sin volver a subir y termina en negro.
+
+41. **El zombi de la mordida, más visible ✅** — Sin cambiarle la pose: la cabeza 20% más grande y los brazos (y los bíceps) 40% más gruesos, con las manos un poco más grandes. `Skeleton` sumó `head_scale` y `arm_scale` (1 = proporción real, lo de todas las demás figuras); la boca se sigue poniendo en la mordida después de agrandar la cabeza, así que sigue mordiendo el cuello de la novia.
 
 ---
 

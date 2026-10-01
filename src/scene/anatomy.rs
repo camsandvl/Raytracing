@@ -54,6 +54,11 @@ pub struct Skeleton {
     /// Hacia dónde apunta cada pie. Si apunta en la línea de la pierna (hacia donde sigue
     /// la pantorrilla), el pie queda estirado: arrodillado, o boca abajo en el piso.
     pub toes: [Vec3; 2],
+    /// Cuánto más grande que lo normal es la cabeza (1 = proporción real), y cuánto más
+    /// gruesos los brazos: para que una figura se lea mejor de lejos sin cambiarle la pose
+    /// (el zombi de la mordida).
+    pub head_scale: f32,
+    pub arm_scale: f32,
 }
 
 impl Skeleton {
@@ -104,6 +109,8 @@ impl Skeleton {
             ankles: [l.5, r.5],
             palms: [l.6, r.6],
             toes: [toe, toe],
+            head_scale: 1.0,
+            arm_scale: 1.0,
         };
         skeleton.turn_head(pose.look, up);
         skeleton
@@ -116,7 +123,7 @@ impl Skeleton {
         let crown = perpendicular(crown, face, self.up);
         let k = self.k;
         self.neck_top = self.neck + (self.up * 0.6 + crown * 0.4 + face * 0.1).normalize() * (0.085 * k);
-        self.head = self.neck_top + crown * (0.075 * k) - face * (0.005 * k);
+        self.head = self.neck_top + (crown * 0.075 - face * 0.005) * (k * self.head_scale);
         self.face = face;
         self.crown = crown;
         self.across = crown.cross(&face).normalize();
@@ -160,7 +167,7 @@ impl Skeleton {
     /// Un punto de la cabeza: `u` hacia la coronilla, `f` hacia la cara y `a` de oreja a
     /// oreja, desde el centro de la cabeza (en metros).
     pub fn head_at(&self, u: f32, f: f32, a: f32) -> Vec3 {
-        self.head + (self.crown * u + self.face * f + self.across * a) * self.k
+        self.head + (self.crown * u + self.face * f + self.across * a) * (self.k * self.head_scale)
     }
 
     pub fn torso_axes(&self) -> [Vec3; 3] {
@@ -327,18 +334,20 @@ pub fn body(sk: &Skeleton) -> Body {
         let (shoulder, elbow, wrist) = (sk.shoulders[i], sk.elbows[i], sk.wrists[i]);
         let (d1, d2) = ((elbow - shoulder).normalize(), (wrist - elbow).normalize());
         let out = perpendicular(shoulder - sk.neck, d1, sk.side);
+        let t = t * sk.arm_scale; // los brazos (piernas aparte)
         upper_arms[i] = vec![
             e(shoulder + d1 * (0.035 * k) + out * (0.008 * k), along(d1), [0.058 * t.max(0.85), 0.055 * t.max(0.85), 0.08]),
             Shape::cone(shoulder, elbow, 0.046 * t * k, 0.036 * t * k),
             e(shoulder + d1 * (0.15 * k), along(d1), [0.045 * t, 0.043 * t, 0.1]),
         ];
-        let knob = if sk.build == Build::Corpse { 0.034 } else { 0.036 * t };
+        let knob = if sk.build == Build::Corpse { 0.034 * sk.arm_scale } else { 0.036 * t };
         forearms[i] = vec![
             sphere(elbow, knob),
             Shape::cone(elbow, wrist, 0.042 * t * k, 0.025 * t.max(0.8) * k),
             e(elbow + d2 * (0.075 * k), along(d2), [0.043 * t, 0.038 * t, 0.085]),
         ];
         hands[i] = hand(sk, wrist, d2, sk.palms[i], i);
+        let t = sk.limb();
 
         let (hip, knee, ankle) = (sk.hips[i], sk.knees[i], sk.ankles[i]);
         let (d3, d4) = ((knee - hip).normalize(), (ankle - knee).normalize());
@@ -381,7 +390,7 @@ fn hand(sk: &Skeleton, wrist: Vec3, dir: Vec3, palm: Vec3, i: usize) -> Vec<Shap
     let s = match sk.build {
         Build::Woman => 0.88,
         _ => 1.0,
-    };
+    } * (1.0 + (sk.arm_scale - 1.0) * 0.4);
     let palm = perpendicular(palm, dir, sk.front);
     let thumb_side = if i == 0 { 1.0 } else { -1.0 };
     let across = dir.cross(&palm).normalize() * thumb_side;
@@ -397,7 +406,7 @@ fn hand(sk: &Skeleton, wrist: Vec3, dir: Vec3, palm: Vec3, i: usize) -> Vec<Shap
 
 /// La cabeza y lo que se le talla.
 fn head(sk: &Skeleton) -> (Vec<Shape>, Vec<Shape>) {
-    let k = sk.k;
+    let k = sk.k * sk.head_scale;
     let axes = sk.head_axes();
     let e = |c: Vec3, r: [f32; 3]| Shape::ellipsoid(c, axes, Vec3::new(r[0], r[1], r[2]) * k);
     let sphere = |c: Vec3, r: f32| Shape::sphere(c, r * k);

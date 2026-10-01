@@ -1,5 +1,5 @@
 //! Una tipografía de píxeles mínima (5×7), para los carteles de la intro ("PRESS ANY
-//! KEY...", "SAY CHEESE!...", "...WAIT. DID YOU HEAR THAT?"). Nada de archivos de fuente — cada glyph es
+//! KEY...", "SAY CHEESE!..."). Nada de archivos de fuente — cada glyph es
 //! 5 columnas × 7 filas, a mano, igual de "generado en código" que el resto de la escena.
 //! Cubre justo las letras que hacen falta para esos mensajes; agregar una letra nueva es
 //! sumar una fila a `glyph`.
@@ -13,12 +13,16 @@ pub const GLYPH_HEIGHT: usize = 7;
 fn glyph(c: char) -> [u8; GLYPH_HEIGHT] {
     match c.to_ascii_uppercase() {
         'A' => [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+        'B' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110],
         'C' => [0b01111, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b01111],
         'D' => [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110],
         'E' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
+        'G' => [0b01111, 0b10000, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111],
         'H' => [0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
         'I' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111],
         'K' => [0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001],
+        'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
+        'M' => [0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001],
         'N' => [0b10001, 0b11001, 0b10101, 0b10101, 0b10011, 0b10001, 0b10001],
         'O' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
         'P' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000],
@@ -31,14 +35,17 @@ fn glyph(c: char) -> [u8; GLYPH_HEIGHT] {
         '!' => [0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00000, 0b00100],
         '.' => [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00100],
         '?' => [0b01110, 0b10001, 0b00001, 0b00110, 0b00100, 0b00000, 0b00100],
+        '\'' => [0b00100, 0b00100, 0b01000, 0b00000, 0b00000, 0b00000, 0b00000],
+        '*' => [0b00000, 0b10101, 0b01110, 0b11111, 0b01110, 0b10101, 0b00000],
         _ => [0; GLYPH_HEIGHT], // espacio, o cualquier letra sin glyph: en blanco
     }
 }
 
 /// Cuánto ocupa `text` dibujado con `draw_text` a esta `scale` (en píxeles de pantalla):
-/// para centrarlo antes de dibujarlo.
+/// para centrarlo antes de dibujarlo. Sin la columna de espacio después de la última
+/// letra (si no, todo cartel centrado quedaba corrido a la izquierda).
 pub fn text_width(text: &str, scale: usize) -> usize {
-    text.chars().count() * (GLYPH_WIDTH + 1) * scale
+    (text.chars().count() * (GLYPH_WIDTH + 1)).saturating_sub(1) * scale
 }
 
 /// Dibuja `text` (se pasa a mayúsculas) sobre `buffer` (de `width` × `height`, en el
