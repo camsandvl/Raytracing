@@ -749,7 +749,7 @@ fn lancet_columns(width: isize, height: isize) -> Vec<isize> {
 /// este), así que el vidrio tiene un resplandor propio tenue para que se vea de noche.
 const AISLE_GLASS: (isize, isize, isize) = (12, 36, 8); // ancho, alto, alféizar
 const AISLE_GLASS_START: isize = (BAY - 12) / 2; // dentro del tramo: centrada
-const AISLE_GLASS_GLOW: f32 = 0.9;
+const AISLE_GLASS_GLOW: f32 = 1.1;
 
 fn aisle_windows(grid: &mut VoxelGrid, m: &MaterialSet) {
     let (width, height, sill) = AISLE_GLASS;
@@ -1247,7 +1247,7 @@ pub fn build(textures: &mut TextureBank) -> Scene {
                 half_width: Vec3::new(0.0, 0.0, width as f32 / 2.0 + 0.2),
                 half_height: Vec3::new(0.0, height as f32 / 2.0 + 0.2, 0.0),
             };
-            lights.push(Light::spot(light, floor, 0.36, Color::new(170, 190, 255), 6000.0).through(window));
+            lights.push(Light::spot(light, floor, 0.36, Color::new(170, 190, 255), 8500.0).through(window));
         }
     }
 

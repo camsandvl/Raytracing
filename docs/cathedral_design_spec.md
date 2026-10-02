@@ -638,6 +638,10 @@ Cada luz sale de la llama de un prop (fase 5):
 
 44. **La foto del vitral entra con interferencia ✅** — Al aparecer la foto del vitral rajado, 0.6 s de interferencia que se calma hasta la foto limpia: franjas horizontales de alto al azar corridas hacia un costado, el rojo y el azul separados del verde y alguna franja negra, con el patrón cambiando cada dos cuadros (más a saltos). Después, a pedido del autor, también la foto de los novios entra así. Solo código (`intro::glitch_in`, `glitch_frame`), sin costo de render. Test: sin intensidad la imagen queda igual; al máximo cambia.
 
+45. **Un poco más de brillo ✅** — A pedido del autor: el resplandor de los zombis, un poco más (la carne de 0.12 a 0.16, la carne más podrida de 0.08 a 0.11), y la luz de los vitrales enteros de las naves laterales, más fuerte (cada foco de luna detrás de un vitral de 6000 a 8500, y el brillo propio del vidrio de 0.9 a 1.1).
+
+46. **P: sacar fotos en primera persona ✅** — En el modo primera persona, P dispara el mismo flash de la cámara de la intro sobre lo que se está viendo (blanco que se apaga en ~0.7 s; cada P lo reinicia). Solo el efecto, no guarda nada. Sin costo: es la misma mezcla con blanco del final de la intro.
+
 ---
 
 ## 5. Especificación original de Manus

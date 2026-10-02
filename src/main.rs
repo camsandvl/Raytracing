@@ -505,6 +505,11 @@ fn run_window(presets: &[CameraPreset], bounds: &[(Vec3, Vec3)], walk_spawn: Spa
         }
 
         if walking {
+            // P: sacar una foto — solo el flash de la cámara sobre lo que se está viendo.
+            if window.is_key_pressed(Key::P, KeyRepeat::No) {
+                from_white = true;
+                fade_start = Some(Instant::now());
+            }
             if window.is_key_pressed(Key::R, KeyRepeat::No) {
                 walker.respawn();
                 moved = true;
@@ -563,7 +568,7 @@ fn run_window(presets: &[CameraPreset], bounds: &[(Vec3, Vec3)], walk_spawn: Spa
                 }
             }
         }
-        let mode = if walking { "primera persona (F: salir, WASD, flechas/arrastrar: mirar, Shift: correr, Espacio: saltar, R: reaparecer)" } else { "orbital (F: primera persona)" };
+        let mode = if walking { "primera persona (F: salir, WASD, flechas/arrastrar: mirar, Shift: correr, Espacio: saltar, R: reaparecer, P: foto)" } else { "orbital (F: primera persona)" };
 
         if moved {
             pending = Pending::Preview;
@@ -604,6 +609,9 @@ fn run_window(presets: &[CameraPreset], bounds: &[(Vec3, Vec3)], walk_spawn: Spa
         if from_white {
             let level = intro::fade_in_level(fade_start.get_or_insert_with(Instant::now).elapsed());
             from_white = level > 0;
+            if !from_white {
+                fade_start = None; // listo para el próximo flash
+            }
             intro::whiten(&display, level, &mut faded);
             window.update_with_buffer(&faded, display_w, display_h).expect("fallo actualizando la ventana");
         } else {

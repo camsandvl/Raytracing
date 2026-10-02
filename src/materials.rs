@@ -150,7 +150,7 @@ pub fn build(textures: &mut TextureBank) -> MaterialSet {
         veil: Material::new(white, 12.0, [0.3, 0.1, 0.0, 0.72], 1.03, Some(veil_tex)),
         petal: Material::new(Color::new(128, 24, 38), 10.0, [0.9, 0.1, 0.0, 0.0], 1.0, None),
 
-        zombie_skin: Material::new(white, 6.0, [0.9, 0.05, 0.0, 0.0], 1.0, Some(rot_tex)).with_glow(0.12),
+        zombie_skin: Material::new(white, 6.0, [0.9, 0.05, 0.0, 0.0], 1.0, Some(rot_tex)).with_glow(0.16),
         blood: Material::new(Color::new(98, 10, 14), 50.0, [0.8, 0.35, 0.06, 0.0], 1.0, None).with_glow(0.1),
         satin: Material::new(Color::new(240, 236, 226), 40.0, [0.88, 0.22, 0.0, 0.0], 1.0, None),
         tux: Material::new(Color::new(30, 30, 36), 14.0, [0.9, 0.1, 0.0, 0.0], 1.0, None),
@@ -159,7 +159,7 @@ pub fn build(textures: &mut TextureBank) -> MaterialSet {
         rouge: Material::new(Color::new(150, 28, 40), 40.0, [0.9, 0.2, 0.0, 0.0], 1.0, None).with_glow(0.06),
         mouth: Material::new(Color::new(44, 8, 10), 30.0, [0.9, 0.15, 0.0, 0.0], 1.0, None),
         iris: Material::new(Color::new(30, 20, 14), 60.0, [0.8, 0.3, 0.0, 0.0], 1.0, None),
-        rot: Material::new(Color::new(150, 128, 96), 6.0, [0.9, 0.05, 0.0, 0.0], 1.0, Some(rot_tex)).with_glow(0.08),
+        rot: Material::new(Color::new(150, 128, 96), 6.0, [0.9, 0.05, 0.0, 0.0], 1.0, Some(rot_tex)).with_glow(0.11),
         skin: Material::new(Color::new(222, 176, 142), 12.0, [0.9, 0.08, 0.0, 0.0], 1.0, None).with_glow(0.1),
         hair: Material::new(Color::new(62, 40, 26), 8.0, [0.9, 0.05, 0.0, 0.0], 1.0, None),
         tux_grey: Material::new(Color::new(188, 190, 198), 20.0, [0.88, 0.15, 0.0, 0.0], 1.0, Some(veil_tex)),
